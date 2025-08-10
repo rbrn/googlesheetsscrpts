@@ -1,5 +1,15 @@
 /***********************
  * ALB Daily Report — Auto Spot + Futures (chronological)
+ *
+ * Business logic:
+ *   - Track daily lithium carbonate spot prices and the actively traded LC2508
+ *     futures contract.  Comparing the two gives a real‑time view of how future
+ *     expectations diverge from the current physical market.
+ *   - Every run appends a new row to a raw data sheet and refreshes a summary
+ *     sheet with the latest spread versus Albemarle's guidance price.
+ *   - A small chart of the last 10 days helps visualize the relationship over
+ *     time for quick monitoring.
+ *
  * Spot source (primary): TradingEconomics lithium API (guest key)
  * Fallback spot: SMM USD/mt page
  * Futures source: SMM LC2508 page (CNY/t)
@@ -16,7 +26,7 @@ const CFG = {
 
 function updateALBDailyReport(){ return ALB_UpdateNow(); }
 
-// Manual test run
+  // Manual test run
 function ALB_UpdateNow() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const raw = ss.getSheetByName(CFG.SHEET_RAW) || ss.insertSheet(CFG.SHEET_RAW);
@@ -31,11 +41,11 @@ function ALB_UpdateNow() {
   // Fetch futures LC2508 (CNY/t)
   const futCnyPerT = fetchFuturesLC2508_CNYt_OrNull();
 
-  // Convert futures to USD/mt
+  // Convert futures to USD/mt so it is comparable with the spot quote
   const fx = CFG.FX_CNY_PER_USD;
   const futUsdMt = isFiniteNumber_(futCnyPerT) ? (futCnyPerT / fx) : null;
 
-  // Spreads
+  // Spreads highlight how much the futures market expects prices to move
   const spreadUsdMt = (isFiniteNumber_(spotUsdMt) && isFiniteNumber_(futUsdMt)) ? (futUsdMt - spotUsdMt) : null;
   const spreadPct = (isFiniteNumber_(spreadUsdMt) && isFiniteNumber_(spotUsdMt)) ? ((spreadUsdMt / spotUsdMt) * 100) : null;
 
@@ -53,7 +63,7 @@ function ALB_UpdateNow() {
     (isFiniteNumber_(spotUsdMt) ? "SMM" : "")
   ]);
 
-  // Refresh summary + 10-day chart
+  // Refresh summary + 10-day chart to provide a quick snapshot for the user
   buildSummary_(sum, raw);
 
   Logger.log("ALB update complete @ " + now);
@@ -62,6 +72,9 @@ function ALB_UpdateNow() {
 
 
 // --- Spot fetch from SMM by scraping the specific div class ---
+// If TradingEconomics is unavailable this scraper pulls the headline USD/mt
+// price directly from the SMM page and falls back through several patterns to
+// handle minor site changes.
 // Page: https://www.metal.com/Lithium/201102250059
 function fetchSpotUSDmt_SMM_Strict() {
   try {
@@ -197,10 +210,10 @@ function buildSummary_(sum, raw){
 
     const startRow = Math.max(2, lastRow - 9);
     const numRows = lastRow - startRow + 1;
-    const data = raw.getRange(startRow, 1, numRows, 9).getValues();
-    data.forEach(r => sum.appendRow([r[0], r[1], r[4], r[7]]));
+      const data = raw.getRange(startRow, 1, numRows, 9).getValues();
+      data.forEach(r => sum.appendRow([r[0], r[1], r[4], r[7]]));
 
-    createOrUpdateChart_(sum);
+      createOrUpdateChart_(sum); // visual of spot vs futures vs guidance
   } else {
     sum.appendRow(["Note","Not enough history yet to draw the 10-day chart."]);
   }
