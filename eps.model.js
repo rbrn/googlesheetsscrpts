@@ -1,5 +1,16 @@
 /***********************
  * EPS model: Front-month LC futures → EPS projection (reuses existing sheet)
+ *
+ * Business logic:
+ *   - Albemarle (ALB) earnings are highly sensitive to the lithium carbonate (LC)
+ *     price.  We use the front‑month LC futures contract as a real-time proxy for
+ *     realized selling price.
+ *   - The futures price is converted from CNY/t to USD/mt and compared with a
+ *     baseline price derived from management guidance.  The difference drives
+ *     projected revenue, EBITDA and ultimately EPS.
+ *   - User-maintained assumptions (volume, margin, D&A, interest, tax and share
+ *     count) are read from the sheet so that scenarios can be tuned without
+ *     editing the script.
  ***********************/
 const EPS_CFG = {
   SHEET: "EPS_Model",
@@ -32,11 +43,14 @@ function ALB_UpdateEPS_Model() {
 
   ensureEpsHeaders_Extended_(sh);   // wider header set
 
-  // --- Read assumptions (edit in cells N2:S2) ---
+  // --- Read operational assumptions (edit in cells N2:S2) ---
+  // These capture quarterly volume, margin structure and capital items.  They
+  // let the EPS model flex with different operating scenarios without changing
+  // the code.
   const [volQ_mt, ebitdaMarginPct, dnaM, intM, taxPct, sharesM] =
     sh.getRange("N2:S2").getValues()[0].map(v => Number(v));
 
-  // Fallbacks if cells empty
+  // Fallbacks if cells are blank so the model still runs on a fresh sheet
   const VOL_Q = isFiniteNumber_(volQ_mt) ? volQ_mt : 48000;
   const EBITDA_MAR = isFiniteNumber_(ebitdaMarginPct) ? ebitdaMarginPct/100 : 0.40;
   const DNA_M = isFiniteNumber_(dnaM) ? dnaM : 100;
@@ -45,37 +59,43 @@ function ALB_UpdateEPS_Model() {
   const SHARES_M = isFiniteNumber_(sharesM) ? sharesM : 117;
 
   // --- Futures (front month) ---
+  // Futures are used as a proxy for current LC pricing.  We always pull the
+  // closest-dated contract ("front month") and translate it to USD/mt.
   const lcCode = getFrontMonthLCCode_();                     // e.g., LC2508
   const futCny = fetchLCFutures_CNYt_(lcCode);
   const fx = EPS_CFG.FX_CNY_PER_USD;
   const futUsdMt = isFiniteNumber_(futCny) ? (futCny / fx) : null;
 
   // --- Baseline & deltas ---
+  // Compare the latest futures price to a guidance baseline to see how far
+  // current pricing is above/below management's reference point.
   const baseUsd = EPS_CFG.BASELINE_USD_MT;
   const priceDelta = (isFiniteNumber_(futUsdMt) ? (futUsdMt - baseUsd) : null);
 
   // EBITDA/EPS sensitivities (still available for comparison)
+  // These show the simpler sensitivity-based projection for quick comparison
+  // against the more detailed model below.
   const ebitdaBase = EPS_CFG.EBITDA_BASELINE_M;
   const ebitdaDeltaSens = (isFiniteNumber_(priceDelta) ? (priceDelta / 1000) * EPS_CFG.EBITDA_PER_1000_USD_M : null);
   const epsBase = EPS_CFG.EPS_BASELINE;
   const epsProjectedSens = (isFiniteNumber_(priceDelta) ? (epsBase + (priceDelta / 1000) * EPS_CFG.EPS_PER_1000_USD) : null);
 
-  // --- Revenue & EBITDA model from assumptions ---
-  // Revenue (US$M) = Futures_USD/mt * Volume_Q_mt / 1e6
+  // --- Revenue & EPS model using explicit P&L assumptions ---
+  // Step 1: Revenue (US$M) = Futures_USD/mt * Volume_Q_mt / 1e6
   const revenueM = isFiniteNumber_(futUsdMt) ? (futUsdMt * VOL_Q) / 1e6 : null;
-  // EBITDA (US$M) = Revenue * EBITDA_Margin
+  // Step 2: EBITDA (US$M) = Revenue * EBITDA_Margin
   const ebitdaM = isFiniteNumber_(revenueM) ? (revenueM * EBITDA_MAR) : null;
-  // EBIT (US$M) = EBITDA - D&A
+  // Step 3: EBIT (US$M) = EBITDA - D&A
   const ebitM = (isFiniteNumber_(ebitdaM) ? ebitdaM : 0) - (isFiniteNumber_(DNA_M) ? DNA_M : 0);
-  // EBT (US$M) = EBIT - Interest
+  // Step 4: EBT (US$M) = EBIT - Interest
   const ebtM = ebitM - (isFiniteNumber_(INT_M) ? INT_M : 0);
-  // Net Income (US$M)
+  // Step 5: Net Income (US$M) after applying tax
   const netM = ebtM * (1 - (isFiniteNumber_(TAX) ? TAX : 0.20));
-  // EPS (US$) = Net / Shares
+  // Step 6: EPS (US$) = Net / Shares
   const epsModel = (isFiniteNumber_(netM) && isFiniteNumber_(SHARES_M) && SHARES_M > 0)
       ? (netM * 1e6) / (SHARES_M * 1e6) : null;
 
-  // Append newest at bottom
+  // Append newest calculations at bottom so history is chronological
   sh.appendRow([
     new Date(),               // A Timestamp
     lcCode,                   // B LC_Code
@@ -97,7 +117,7 @@ function ALB_UpdateEPS_Model() {
     isFiniteNumber_(epsModel) ? round2_(epsModel) : ""        // R EPS_Model (from revenue)
   ]);
 
-  buildEpsDualAxisChart_(sh); // prettier chart
+  buildEpsDualAxisChart_(sh); // redraw chart of Futures vs. EPS
 }
 
 /** Ensure expanded headers and assumption labels */
