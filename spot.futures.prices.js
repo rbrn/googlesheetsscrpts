@@ -107,6 +107,9 @@ function appendDailyData(spotUsd, futUsd){
   const sh = ss.getSheetByName(CFG.SHEET) || ss.insertSheet(CFG.SHEET);
   ensureHeaders_(sh);
 
+  // Futures minus spot highlights how far forward contracts are deviating
+  // from physical market pricing. This spread is key for gauging sentiment
+  // and potential EPS impact.
   const spreadUsd = (isFiniteNumber_(futUsd) && isFiniteNumber_(spotUsd)) ? (futUsd - spotUsd) : null;
   const spreadPct = (isFiniteNumber_(spreadUsd) && isFiniteNumber_(spotUsd)) ? ((spreadUsd / spotUsd) * 100) : null;
 
@@ -121,7 +124,9 @@ function appendDailyData(spotUsd, futUsd){
 
 /***********************
  * Redraw chart of the last 10 days
- * A helper sheet is used to include the constant $9,500/mt guidance line.
+ * Visual aid: overlays futures, spot and Albemarle's $9,500/mt guidance
+ * to see whether the market is pricing above or below management's view.
+ * A helper sheet is used to include the constant guidance line.
  ***********************/
 function updateChart(){
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -162,6 +167,7 @@ function ensureHeaders_(sh){
 }
 
 /*** Small helpers ***/
+// Guard against NaN/null so spreadsheet cells aren't polluted
 function isFiniteNumber_(x){ return typeof x === 'number' && isFinite(x); }
+// Round to 2 decimals for cleaner USD figures
 function round2_(x){ return Math.round(x*100)/100; }
-function round0_(x){ return Math.round(x); }
