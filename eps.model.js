@@ -146,7 +146,11 @@ function ensureEpsHeaders_Extended_(sh){
   }
 }
 
-/** Dual-axis chart: Futures USD/mt (left) vs EPS_Model (right) */
+/**
+ * Dual-axis chart: Futures USD/mt (left) vs EPS_Model (right)
+ * Visualizes how the modeled earnings move with the futures curve so
+ * management and investors can monitor sensitivity over time.
+ */
 function buildEpsDualAxisChart_(sh){
   const lr = sh.getLastRow();
   if (lr < 3) return;
@@ -223,51 +227,10 @@ function fetchLCFutures_CNYt_(lcCode) {
   }
 }
 
-/** Ensure headers for EPS_Model */
-function ensureEpsHeaders_(sh) {
-  if (sh.getLastRow() === 0) {
-    sh.appendRow([
-      "Timestamp",
-      "LC_Code",
-      "Futures_CNY_per_t",
-      "FX_CNY_per_USD",
-      "Futures_USD_per_mt",
-      "Baseline_USD_per_mt",
-      "Price_Delta_USD",
-      "EBITDA_Baseline_M",
-      "EBITDA_Δ_M",
-      "EPS_Baseline",
-      "EPS_Projected"
-    ]);
-  }
-}
-
-/** Tiny helper chart (last 14 rows) */
-function buildEpsMiniChart_(sh) {
-  const lr = sh.getLastRow();
-  if (lr < 3) return; // need some data
-  const start = Math.max(2, lr - 13);
-  const range = sh.getRange(start, 1, lr - start + 1, 11); // whole row slice
-
-  // Remove existing charts to avoid multiples
-  sh.getCharts().forEach(c => sh.removeChart(c));
-
-  // Build a small line chart for Futures_USD_per_mt & EPS_Projected
-  const chart = sh.newChart()
-    .asLineChart()
-    .addRange(sh.getRange(start, 1, lr - start + 1, 1))   // Timestamp
-    .addRange(sh.getRange(start, 5, lr - start + 1, 1))   // Futures_USD_per_mt
-    .addRange(sh.getRange(start, 11, lr - start + 1, 1))  // EPS_Projected
-    .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_ROWS)
-    .setPosition(2, 8, 0, 0)
-    .setOption('title', 'Front-month Futures (USD/mt) & EPS Projection (last ~14)')
-    .setOption('legend', { position: 'bottom' })
-    .setOption('hAxis', { slantedText: true })
-    .build();
-  sh.insertChart(chart);
-}
-
-/*** Reuse helpers from your existing script ***/
+/*** Utility helpers: keep spreadsheet data clean ***/
+// Guard against NaN/null so we don't append "undefined" strings
 function isFiniteNumber_(x){ return typeof x === 'number' && isFinite(x); }
+// Round to 2 decimals for USD figures
 function round2_(x){ return Math.round(x*100)/100; }
+// Round to 0 decimals for raw CNY futures price
 function round0_(x){ return Math.round(x); }

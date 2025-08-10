@@ -1,260 +1,173 @@
 /***********************
- * ALB Daily Report — Auto Spot + Futures (chronological)
+ * ALB Daily Spot vs Futures Report (for EPS_Model)
  *
  * Business logic:
- *   - Track daily lithium carbonate spot prices and the actively traded LC2508
- *     futures contract.  Comparing the two gives a real‑time view of how future
- *     expectations diverge from the current physical market.
- *   - Every run appends a new row to a raw data sheet and refreshes a summary
- *     sheet with the latest spread versus Albemarle's guidance price.
- *   - A small chart of the last 10 days helps visualize the relationship over
- *     time for quick monitoring.
- *
- * Spot source (primary): TradingEconomics lithium API (guest key)
- * Fallback spot: SMM USD/mt page
- * Futures source: SMM LC2508 page (CNY/t)
+ *   - Retrieve battery‑grade lithium carbonate spot prices and the actively
+ *     traded LC2508 futures contract from Metal.com.
+ *   - Convert both series from CNY/mt to USD/mt using a fixed FX rate so they
+ *     are directly comparable.
+ *   - Append today’s values to the `Raw_Data` sheet where history is stored in
+ *     chronological order for trend analysis.
+ *   - Compute and store the absolute and percentage spread between futures and
+ *     spot to monitor market expectations.
+ *   - Refresh a chart of the last 10 days showing spot, futures and Albemarle’s
+ *     $9,500/mt guidance midpoint.
  ***********************/
 const CFG = {
-  SHEET_RAW: "raw_data",
-  SHEET_SUMMARY: "summary",
-  FX_CNY_PER_USD: 7.20, // adjust if desired
-  GUIDANCE_USD_MT: 9500,
-  // Data sources
-  URL_SPOT_SMM_USD: "https://www.metal.com/Lithium/201102250059", // fallback
-  URL_FUT_LC2508: "https://www.metal.com/Lithium/lc2508",
+  SHEET: 'Raw_Data',
+  FX_CNY_PER_USD: 7.20,                 // update or replace with live FX API
+  GUIDANCE_USD_MT: 9500,                // Albemarle guidance midpoint
+  URL_SPOT: 'https://www.metal.com/Lithium/201102250058', // Metal.com spot page (CNY/t)
+  URL_FUTURES: 'https://www.metal.com/Lithium/lc2508',    // Metal.com LC2508 futures (CNY/t)
 };
 
-function updateALBDailyReport(){ return ALB_UpdateNow(); }
-
-  // Manual test run
-function ALB_UpdateNow() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const raw = ss.getSheetByName(CFG.SHEET_RAW) || ss.insertSheet(CFG.SHEET_RAW);
-  const sum = ss.getSheetByName(CFG.SHEET_SUMMARY) || ss.insertSheet(CFG.SHEET_SUMMARY);
-
-  // Ensure headers & order (oldest at top, we always append to bottom)
-  ensureHeaders_(raw);
-
-  // Fetch spot (USD/mt)
-  let spotUsdMt = fetchSpotUSDmt_SMM_Strict();
-
-  // Fetch futures LC2508 (CNY/t)
-  const futCnyPerT = fetchFuturesLC2508_CNYt_OrNull();
-
-  // Convert futures to USD/mt so it is comparable with the spot quote
-  const fx = CFG.FX_CNY_PER_USD;
-  const futUsdMt = isFiniteNumber_(futCnyPerT) ? (futCnyPerT / fx) : null;
-
-  // Spreads highlight how much the futures market expects prices to move
-  const spreadUsdMt = (isFiniteNumber_(spotUsdMt) && isFiniteNumber_(futUsdMt)) ? (futUsdMt - spotUsdMt) : null;
-  const spreadPct = (isFiniteNumber_(spreadUsdMt) && isFiniteNumber_(spotUsdMt)) ? ((spreadUsdMt / spotUsdMt) * 100) : null;
-
-  // Append new row at bottom (newest → bottom)
-  const now = new Date();
-  raw.appendRow([
-    now,
-    isFiniteNumber_(spotUsdMt) ? round2_(spotUsdMt) : "",
-    isFiniteNumber_(futCnyPerT) ? round0_(futCnyPerT) : "",
-    fx,
-    isFiniteNumber_(futUsdMt) ? round2_(futUsdMt) : "",
-    isFiniteNumber_(spreadUsdMt) ? round2_(spreadUsdMt) : "",
-    isFiniteNumber_(spreadPct) ? round2_(spreadPct) : "",
-    CFG.GUIDANCE_USD_MT,
-    (isFiniteNumber_(spotUsdMt) ? "SMM" : "")
-  ]);
-
-  // Refresh summary + 10-day chart to provide a quick snapshot for the user
-  buildSummary_(sum, raw);
-
-  Logger.log("ALB update complete @ " + now);
-  return true;
+/** Menu hook */
+function onOpen(){
+  SpreadsheetApp.getUi().createMenu('ALB Report')
+    .addItem('Update Now', 'runDailyUpdate')
+    .addToUi();
 }
 
+/** Entry point – fetch prices, append row, refresh chart */
+function runDailyUpdate(){
+  const spotUsd = getSpotPrice();
+  const futUsd = getFuturesPrice();
+  appendDailyData(spotUsd, futUsd);
+  updateChart();
+}
 
-// --- Spot fetch from SMM by scraping the specific div class ---
-// If TradingEconomics is unavailable this scraper pulls the headline USD/mt
-// price directly from the SMM page and falls back through several patterns to
-// handle minor site changes.
-// Page: https://www.metal.com/Lithium/201102250059
-function fetchSpotUSDmt_SMM_Strict() {
+/***********************
+ * Fetch battery-grade lithium carbonate spot price
+ * Scrapes the `<div class="price___2mpJr">` element from the Metal.com spot
+ * page.  The value is assumed to be in CNY per metric ton and translated to
+ * USD/mt via `CFG.FX_CNY_PER_USD`.
+ ***********************/
+function getSpotPrice(){
   try {
-    var html = UrlFetchApp.fetch("https://www.metal.com/Lithium/201102250059", {
-      method: "get",
-      muteHttpExceptions: true,
-      followRedirects: true,
+    const html = UrlFetchApp.fetch(CFG.URL_SPOT, {
+      method: 'get', muteHttpExceptions: true, followRedirects: true,
       headers: {
-        "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        // Optional: some sites behave better with a simple referer
-        "Referer": "https://www.metal.com/"
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+        'Referer': 'https://www.metal.com/'
       }
     }).getContentText();
 
-    // 1) Exact selector you requested
-    var mStrict = html.match(/<div\s+class="price___2mpJr">\s*([\d,]+(?:\.\d+)?)\s*<\/div>/i);
-    if (mStrict && mStrict[1]) {
-      var val = parseFloat(mStrict[1].replace(/,/g, ""));
-      if (isFinite(val)) return val; // USD/mt
-    }
-
-    // 2) Fallback: any number followed by USD/mt or USD/t (in case class changes)
-    var mFallback = html.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*(?:USD\/mt|USD\/t)\b/i);
-    if (mFallback && mFallback[1]) {
-      var val2 = parseFloat(mFallback[1].replace(/,/g, ""));
-      if (isFinite(val2)) return val2;
-    }
-
-    // 3) Another fallback: look for "USD" near a big number
-    var mLoose = html.match(/USD[^<>{}]{0,40}?(\d{1,3}(?:,\d{3})*(?:\.\d+)?)/i);
-    if (mLoose && mLoose[1]) {
-      var val3 = parseFloat(mLoose[1].replace(/,/g, ""));
-      if (isFinite(val3)) return val3;
-    }
-
-    return null;
-  } catch (e) {
-    Logger.log("SMM spot strict fetch failed: " + e);
-    return null;
-  }
-}
-
-
-function fetchSpotUSDmt_SMM_OrNull(){
-  try {
-    const html = UrlFetchApp.fetch(CFG.URL_SPOT_SMM_USD, {
-      method:"get", muteHttpExceptions:true, followRedirects:true,
-      headers:{
-        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
-        "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language":"en-US,en;q=0.9"
-      }
-    }).getContentText();
-    // Look for patterns like: 8,836.04 USD/mt or $8,836.04/t
-    const m = html.match(/(\d{1,3}(?:,\d{3})*(?:\.\d+)?)\s*USD\/(?:mt|t)/i);
+    // Extract the first price in the targeted div
+    const m = html.match(/<div\s+class="price___2mpJr">\s*([\d,]+)/i);
     if (m && m[1]) {
-      const val = parseFloat(m[1].replace(/,/g,""));
-      return isFinite(val) ? val : null;
+      const cny = parseFloat(m[1].replace(/,/g, ''));
+      if (isFiniteNumber_(cny)) return cny / CFG.FX_CNY_PER_USD; // USD/mt
     }
     return null;
   } catch(e){
-    Logger.log("SMM fallback spot failed: " + e);
+    Logger.log('getSpotPrice failed: ' + e);
     return null;
   }
 }
 
-function fetchFuturesLC2508_CNYt_OrNull(){
+/***********************
+ * Fetch LC2508 futures last price
+ * Similar scrape as above but on the futures page.  The first large number in
+ * the HTML (60k–90k CNY/t) is treated as the last price and converted to USD/mt.
+ ***********************/
+function getFuturesPrice(){
   try {
-    const html = UrlFetchApp.fetch(CFG.URL_FUT_LC2508, {
-      method:"get", muteHttpExceptions:true, followRedirects:true,
-      headers:{
-        "User-Agent":"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36",
-        "Accept":"text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language":"en-US,en;q=0.9"
+    const html = UrlFetchApp.fetch(CFG.URL_FUTURES, {
+      method: 'get', muteHttpExceptions: true, followRedirects: true,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9'
       }
     }).getContentText();
-    // pick first plausible large number as "last price" (70k–85k range)
-    const nums = html.match(/(\d{2,3},\d{3}|\d{5,6})(?=\s*(?:CNY|元|\/?t|\/?吨)?)/g);
-    if (nums && nums.length) {
-      for (var i=0;i<nums.length;i++){
-        const v = parseInt(nums[i].replace(/,/g,""),10);
-        if (v >= 60000 && v <= 90000) return v;
+
+    const nums = html.match(/(\d{2,3},\d{3}|\d{5,6})(?=\s*(?:CNY|\u5143|\/t|\/吨)?)/g);
+    if (nums && nums.length){
+      for (let i=0;i<nums.length;i++){
+        const v = parseInt(nums[i].replace(/,/g,''),10);
+        if (v >= 60000 && v <= 90000) return v / CFG.FX_CNY_PER_USD; // USD/mt
       }
     }
     return null;
   } catch(e){
-    Logger.log("LC2508 futures fetch failed: " + e);
+    Logger.log('getFuturesPrice failed: ' + e);
     return null;
   }
 }
 
-/*** Summary & chart ***/
-function ensureHeaders_(raw){
-  if (raw.getLastRow() === 0) {
-    raw.appendRow([
-      "Timestamp",            // A
-      "Spot_USD_per_mt",      // B
-      "Futures_CNY_per_t",    // C
-      "FX_CNY_per_USD",       // D
-      "Futures_USD_per_mt",   // E
-      "Spread_USD_per_mt",    // F
-      "Spread_pct",           // G
-      "Guidance_USD_per_mt",  // H
-      "Spot_Source"           // I
-    ]);
-  }
+/***********************
+ * Append today's data to Raw_Data
+ * Sheet layout: Date | Futures_USD_mt | Spot_USD_mt | Spread_USD_mt | Spread_%
+ * New rows are appended at the bottom so chronology is preserved.
+ ***********************/
+function appendDailyData(spotUsd, futUsd){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CFG.SHEET) || ss.insertSheet(CFG.SHEET);
+  ensureHeaders_(sh);
+
+  // Futures minus spot highlights how far forward contracts are deviating
+  // from physical market pricing. This spread is key for gauging sentiment
+  // and potential EPS impact.
+  const spreadUsd = (isFiniteNumber_(futUsd) && isFiniteNumber_(spotUsd)) ? (futUsd - spotUsd) : null;
+  const spreadPct = (isFiniteNumber_(spreadUsd) && isFiniteNumber_(spotUsd)) ? ((spreadUsd / spotUsd) * 100) : null;
+
+  sh.appendRow([
+    new Date(),
+    isFiniteNumber_(futUsd) ? round2_(futUsd) : '',
+    isFiniteNumber_(spotUsd) ? round2_(spotUsd) : '',
+    isFiniteNumber_(spreadUsd) ? round2_(spreadUsd) : '',
+    isFiniteNumber_(spreadPct) ? round2_(spreadPct) : ''
+  ]);
 }
 
-function buildSummary_(sum, raw){
-  sum.clear();
-  const lastRow = raw.getLastRow();
-  const now = new Date();
-  sum.appendRow(["As of", now]);
+/***********************
+ * Redraw chart of the last 10 days
+ * Visual aid: overlays futures, spot and Albemarle's $9,500/mt guidance
+ * to see whether the market is pricing above or below management's view.
+ * A helper sheet is used to include the constant guidance line.
+ ***********************/
+function updateChart(){
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sh = ss.getSheetByName(CFG.SHEET);
+  const lr = sh.getLastRow();
+  if (lr < 2) return; // need at least one data row
 
-  if (lastRow >= 2) {
-    const latest = raw.getRange(lastRow, 1, 1, 9).getValues()[0];
-    const spot = latest[1], futCny = latest[2], fx = latest[3], futUsd = latest[4], spread = latest[5], spreadPct = latest[6], guidance = latest[7], spotSrc = latest[8];
+  const start = Math.max(2, lr - 9); // last 10 rows
+  const numRows = lr - start + 1;
 
-    sum.appendRow(["Spot (USD/mt)", isFiniteNumber_(spot) ? round2_(spot) : "N/A"]);
-    sum.appendRow(["Futures LC2508 (CNY/t)", isFiniteNumber_(futCny) ? round0_(futCny) : "N/A"]);
-    sum.appendRow(["FX (CNY per USD)", fx]);
-    sum.appendRow(["Futures (USD/mt)", isFiniteNumber_(futUsd) ? round2_(futUsd) : "N/A"]);
-    sum.appendRow(["Spread (USD/mt)", isFiniteNumber_(spread) ? round2_(spread) : "N/A"]);
-    sum.appendRow(["Spread (%)", isFiniteNumber_(spreadPct) ? (round2_(spreadPct) + "%") : "N/A"]);
-    sum.appendRow(["ALB Guidance (USD/mt)", guidance]);
-    sum.appendRow(["Spot Source", spotSrc]);
+  // Build temporary sheet with guidance column for charting
+  const temp = ss.getSheetByName('_ChartData') || ss.insertSheet('_ChartData');
+  temp.clear();
+  temp.appendRow(['Date','Futures_USD_mt','Spot_USD_mt','Guidance_USD_mt']);
+  const rows = sh.getRange(start,1,numRows,3).getValues();
+  rows.forEach(r => temp.appendRow([r[0], r[1], r[2], CFG.GUIDANCE_USD_MT]));
 
-    sum.appendRow(['']);
-    sum.appendRow(["Last 10 Days (for chart)"]);
-    sum.appendRow(["Timestamp","Spot_USD_mt","Futures_USD_mt","Guidance_USD_mt"]);
+  // Remove old charts on Raw_Data sheet
+  sh.getCharts().forEach(c => sh.removeChart(c));
 
-    const startRow = Math.max(2, lastRow - 9);
-    const numRows = lastRow - startRow + 1;
-      const data = raw.getRange(startRow, 1, numRows, 9).getValues();
-      data.forEach(r => sum.appendRow([r[0], r[1], r[4], r[7]]));
-
-      createOrUpdateChart_(sum); // visual of spot vs futures vs guidance
-  } else {
-    sum.appendRow(["Note","Not enough history yet to draw the 10-day chart."]);
-  }
-}
-
-function createOrUpdateChart_(sheet){
-  const lr = sheet.getLastRow();
-  // find "Last 10 Days (for chart)"
-  let startRow = null;
-  for (let r=1;r<=lr;r++){
-    if (sheet.getRange(r,1).getValue() === "Last 10 Days (for chart)") {
-      startRow = r + 2;
-      break;
-    }
-  }
-  if (!startRow) return;
-  const numRows = Math.max(0, lr - startRow + 1);
-  if (numRows < 1) return;
-
-  const dataRange = sheet.getRange(startRow, 1, numRows, 4);
-  sheet.getCharts().forEach(ch => sheet.removeChart(ch));
-
-  const chart = sheet.newChart()
+  const chart = sh.newChart()
     .asLineChart()
-    .addRange(dataRange)
+    .addRange(temp.getRange(1,1,numRows+1,4))
     .setMergeStrategy(Charts.ChartMergeStrategy.MERGE_ROWS)
-    .setPosition(2, 6, 0, 0)
     .setOption('title','Lithium Carbonate — Spot vs LC2508 Futures (Last 10 Days) + ALB Guidance')
     .setOption('legend',{ position:'bottom' })
     .setOption('hAxis',{ slantedText:true })
+    .setPosition(2,6,0,0)
     .build();
-  sheet.insertChart(chart);
+  sh.insertChart(chart);
 }
 
-/*** Helpers ***/
+/** Ensure headers exist */
+function ensureHeaders_(sh){
+  if (sh.getLastRow() === 0){
+    sh.appendRow(['Date','Futures_USD_mt','Spot_USD_mt','Spread_USD_mt','Spread_%']);
+  }
+}
+
+/*** Small helpers ***/
+// Guard against NaN/null so spreadsheet cells aren't polluted
 function isFiniteNumber_(x){ return typeof x === 'number' && isFinite(x); }
+// Round to 2 decimals for cleaner USD figures
 function round2_(x){ return Math.round(x*100)/100; }
-function round0_(x){ return Math.round(x); }
-
-function onOpen(){
-  SpreadsheetApp.getUi().createMenu("ALB Report")
-    .addItem("Update Now (Live Fetch)", "ALB_UpdateNow")
-    .addToUi();
-}
