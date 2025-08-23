@@ -1,0 +1,17 @@
+name: Ingest Prices
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ingest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger ingestion
+        run: |
+          curl -X POST "$BASE_URL_BACKEND/api/ingest/prices" -H "x-admin-key: $ADMIN_KEY"
+        env:
+          BASE_URL_BACKEND: ${{ secrets.BASE_URL_BACKEND }}
+          ADMIN_KEY: ${{ secrets.ADMIN_KEY }}
