@@ -1,3 +1,24 @@
+# Lithium Monitoring Backend Skeleton
+
+This repository now contains a TypeScript Express backend skeleton for
+collecting lithium prices and estimating Albemarle (ALB) EPS. The backend
+resides under `app/backend` and includes:
+
+- Express server with `/health` and `/api/eps/estimate` routes.
+- Simple ordinary least squares (OLS) implementation for EPS estimation.
+- Metals.com adapter placeholder to demonstrate the adapter pattern for price ingestion.
+
+## Development
+
+```bash
+cd app/backend
+npm install
+npm test   # runs the OLS unit test
+npm run dev
+```
+
+The previous Google Apps Script content remains below for reference.
+
 # EPS_Model Google Sheet Overview
 
 ## 1. Details of the Generated Code for EPS_Model Google Sheet
