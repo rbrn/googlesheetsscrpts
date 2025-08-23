@@ -1,5 +1,3 @@
-# Lithium Monitoring Monorepo
-
 This repository contains a MERN-stack application for monitoring lithium prices, estimating Albemarle (ALB) EPS, and tracking inventory metrics.
 
 ## Structure
